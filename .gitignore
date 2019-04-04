@@ -1,5 +1,7 @@
 __pycache__/
+.vscode/
 ncedit-windows/
 ncedit-linux.zip
 ncedit-windows.zip
-daymet_v3*
+*.nc*
+*.json

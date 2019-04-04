@@ -63,8 +63,9 @@ class EditNetCDF(object):
 		"""Arguments: f==netCDF file."""
 		self.f = f
 		self.nc = self.GetNC(self.f)
-		self.structure = self.GetStructure(self.nc)
-		self.template = self.GetTemplate(self.structure)
+		if self.nc:
+			self.structure = self.GetStructure(self.nc)
+			self.template = self.GetTemplate(self.structure)
 	
 			
 	@staticmethod
@@ -72,10 +73,10 @@ class EditNetCDF(object):
 		"""Handles netCDF read failures gracefully."""
 		try:
 			nc = nc4.Dataset(f, mode)
-		except Exception as e: 
-			raise(e)
-		return(nc)
-
+			return(nc)
+		except: 
+			print("Failed to read netCDF: "+str(f))
+		
 
 	@staticmethod
 	def GetStructure(nc):
@@ -272,63 +273,6 @@ def fmt(obj, strings = False):
 
 
 objnone = "\t. No {t} {n} found in input template: {j}. Skipping."
-templatehelp = """
-{
-
-	# The updates section is for changes that can't be modified using the 
-	# header alone. Rename dimensions, variables, groups using the 
-	# mappings under 'rename'. Set compression level. Etc.
-
-    "updates": {
-        "rename": {
-            "variables": {
-
-				# 'prcp' variable will be renamed to 'PRECIPITATION' -->>
-                "prcp": "PRECIPITATION",    
-                "time_bnds": "time_bnds",
-                "lat": "lat",
-                "time": "time",
-                "x": "x",
-                "lambert_conformal_conic": "lambert_conformal_conic",
-                "lon": "lon",
-                "y": "y"
-            },
-            "groups": {},
-            "dimensions": {
-                "x": "x",
-                "y": "y",
-                "nv": "nv",
-                "time": "time"
-            }
-        },
-
-		# output variables will be compressed with zlib to level 4 -->>
-        "compression_level": 4
-    },
-
-	# Changes to the header section of the JSON template will be reflected
-	# in the output file. Add/remove dimensions, change attribute names and
-	# values are the main changes intended for this section. I.e.
-
-    "header": {                                         # don't touch -->>
-        "variables": {                                  # ...
-            "lat": {                                    # ...
-                "attributes": {                         # edit this -->>
-                    "standard_name": "latitude",        # ...
-                    "units": "degrees_north",           # ...
-                    "long_name": "latitude coordinate"  # ...
-                },                                      # ...
-                "dimensions": [                         # ...
-                    "y",                                # ...
-                    "x"                                 # ...
-                ]
-            } ...,
-		},
-		"dimensions": { ... },
-		"attributes": { ... } 
-
-"""
-
 
 # ----------------------------------------------------------------------------
 # script mode functions
@@ -368,9 +312,12 @@ if __name__ == '__main__':
 			editor = EditNetCDF(f)
 
 			# write template to json
-			fout = os.path.splitext(os.path.basename(f))[0] +".json"
-			with open(fout, "w") as j:
-				json.dump(editor.template, j, indent=4)
+			try:
+				fout = os.path.splitext(os.path.basename(f))[0] +".json"
+				with open(fout, "w") as j:
+					json.dump(editor.template, j, indent=4)
+			except:
+				print("No JSON written for netCDF: "+os.path.basename(f))
 
 	else:
 		if os.path.isfile(args.json): 	
