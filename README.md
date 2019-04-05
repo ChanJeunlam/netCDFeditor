@@ -28,7 +28,53 @@ Changes are applied in a flexible way. Variables in input netCDF(s) that aren't 
 $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <input_template>.json
 ```
 
-## format of <template>.json
+## Guidance about `<template>.json`
+```
+{                # A FEW USAGE MANDATES: Dimensions, variables, groups should be renamed using "updates": {"rename": {}}
+	"header": {                     # never modify the names of top-level groups "header" or "updates"
+		"dimensions": {             # never modify the "netCDF object type"; i.e. "dimensions", "variables", etc.
+			"lon": {                # never modify the name of a dimension, variable, or group in the "header" section
+				"size": 1000,                  
+				"UNLIMITED": false
+			},                      			  # Some tips about the dimensions:
+			"lat": {                    			  ~ Changes to "size" and "UNLIMITED" elements will 
+				"size": 1000,                         ~  be reflected in outputs. Changes to "size" will
+				"UNLIMITED": false                    ~  rare. Set "UNLIMITED" to true to make the dim
+			},                                        ~  unlimited in the output netCDF(s).
+			"time": {
+				"size": 12,
+				"UNLIMITED": true
+			}
+		},
+		"variables": {              			  # Some tips about the variables:
+			"lon": {                				  ~ remember: do not rename variables using the "header" section
+				"dimensions": [     				  ~ Only in rare circumstances will you want to change dimensions for variable. 
+					"lon"           				  ~  Changes made under "dimensions" WILL be reflected in output and break 
+				],                                    ~  variables.
+				"attributes": {                   # Some tips about variable attributes:
+					"units": "degrees_east",          ~ Attribute names and values are edited under "attributes". You can add,
+					"standard_name": "longitude",     ~  remove, edit as many attributes as you want in this section. This 
+					"long_name": "longitude"          ~  group will be copied entirely, as-is, into output netCDF(s), replacing
+				}                                     ~  the collection of attributes for this variable in the input netCDF(s).
+			},
+		"groups": {},
+		"attributes": {                           # Some tips about global attributes:
+			"title": "",                              ~ Everything said above about variable attributes applies to global attributes.
+			"institution": "",                        ~  The attributes listed here will replace the global attributes in the input
+			"source": "",                             ~  netCDFs. In the future you will be able to pass as an argument your own global 
+			"conventions": "CF-1.6"                   ~  attributes "template" that will automatically be added to the ncedit.py 
+		}                                             ~  template(s; like this one) as they are generated.
+	}, 
+	...
+}
+```
+
+More details about the `updates` section of the `<template>.json` will be added soon...
+
+
+----------------------------------------------------------
+
+## Further explanation of format of <template>.json
 ### `header`
 This section under the `header` element of the JSON is primarily for manipulating file structure/metadata associated with the variables. Changes to the attribute names and values in this section will be reflected in the output file. Also, add/remove dimensions associated with a variable; e.g. in the netCDF to which the template below is applied, the variable *lat* will have the value "THE WRONG standard_name" for the *standard_name* attribute.
 
