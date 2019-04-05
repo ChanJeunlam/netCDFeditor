@@ -1,28 +1,29 @@
 # netCDFeditor
-A python script that generates netCDF structure templates in json format and writes new netCDF files.
+A python script that generates netCDF structure templates in json format and writes new netCDF files. The internals are designed to be as flexible as possible. You will for sure find ways to break the tool, particularly when passing in custom functions to apply to the variable arrays, but rest assured that you can't harm the input copy of the files. Some key points:
+
+* inputs are opened in read-only mode, always; wildcards should work, but haven't been thoroughly tested
+* output filenames have *_edit.nc* appended unless a name is provided at argument position two
+* arguments one and two are always required, a file or a directory:
+    * two arguments: writes json template(s) generated for input netCDF(s) (arg1) to output file or directory (arg2)
+    * three arguments: copies data from input netCDF(s) (arg1) to output netCDF(s) in output directory (arg2) while applying changes indicated using the JSON template (arg3; only one template allowed)
+
 
 ## usage
-The internals are designed to be as flexible as possible. You may find ways to break the tool, particularly when supplying custom functions to apply to variable arrays, but rest assured that you cannot harm your original copy of the files. Some key points:
-
-* inputs are opened in read-only mode, always; wildcards should work, but hasn't had thorough testing
-* output filenames have *_edit.nc* appended to them unless output filename is specified with argument at position two
-* arguments one and two are always required. both can be either a file or a directory:
-    * two arguments: writes json templates generated for input netCDFs (arg1) to output directory (arg2)
-    * three arguments: copies data from input netCDFs (arg1) to output netCDFs in output directory (arg2) while applying changes specified using the JSON template (arg3; only one allowed)
 
 The script should be used in three steps:
 
-1. Generate templates for input netCDF(s).
+1. **Generate templates for input netCDF(s).**
 ```{shell}
 $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory>
 ```
 If a directory is given for argument one, a directory must be given for argument two; but, a file may be given for argument one and a directory for argument two.       
 
-2. Edit the template(s) to reflect the desired changes to apply when generating output netCDF(s).       
-See the section below for better explanation of how the template is applied to outputs. Only one template can be given each time you run the script in *edit* mode.       
+2. **Edit the template(s) to reflect the desired changes to apply when generating output netCDF(s).**       
+See the section below for better explanation of how the template is applied to outputs. Only one template can be given each time you run the script in *edit* mode.     
+  
 Changes are applied in a flexible way. Variables in input netCDF(s) that aren't listed in the provided template are simply copied without any changes. Variables in the provided template that don't exist in the input netCDF(s) have no affect on the output(s). For these reasons, you can paste all of the necessary updates for multiple sets of disparate netCDF files into a single template and update all at once unless they share common variable names with incompatible attributes; e.g. two sets of files with different origins for variable *time* cannot be edited with the same template.
 
-3. Copy data from input netCDF(s) to output netCDF(s), applying changes specified in the input JSON template.
+3. **Copy data from input netCDF(s) to output netCDF(s), applying changes specified in the input JSON template.**
 ```{shell}
 $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <input_template>.json
 ```
