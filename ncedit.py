@@ -7,6 +7,7 @@ import json
 import argparse
 import numpy as np
 import netCDF4 as nc4
+import datetime as dt
 from collections import OrderedDict
 from os.path import join, isfile, isdir, basename, splitext
 
@@ -156,7 +157,7 @@ class EditNetCDF(object):
 				funcs.append({
 					"variables2d_yflip": np.flipud,
 					"variables2d_xflip": np.fliplr,
-					"variables1d_flip": np.flip
+					"variables1d_flip": lambda x: np.flip(x,0)
 				}[modifier])
 		return(funcs)
 
@@ -167,8 +168,10 @@ class EditNetCDF(object):
 			try:
 				func = eval("lambda x: "+f)
 				data = func(data)
-			except:
-				print("Function "+f+" did not evaluate correctly. Skipping.")
+			except Exception as e:
+				print("Function "+f+" did not evaluate correctly:")
+				print(e)
+				print("Skipping."+"-"*79)
 		return(data)
 
 
@@ -254,7 +257,13 @@ class EditNetCDF(object):
 		"""Internal use. Create new dimensions in output netCDF."""
 		for name, dimension in self.nc.dimensions.items():
 			newname = self.rename['dimensions'][name]
-			size = (len(dimension) if not dimension.isunlimited() else None)
+			if self.structure["dimensions"][name]["UNLIMITED"]:
+				size = None
+			else:
+				size = len(dimension)
+			#	size = (len(dimension) if not dimension.isunlimited() else None)
+			
+			
 			self.out.createDimension(newname, size)
 
 
@@ -419,7 +428,8 @@ def args_parser():
 
 	# else glob p1, append _edit to outputs
 	else:
-		in_files = [f for f in glob.glob(p1) if "nc" in splitext(f)[1]]
+		p1g = p1 if any(["nc" in p1,"*" in p1]) else p1+"/*.nc"
+		in_files = [f for f in glob.glob(p1g) if "nc" in splitext(f)[1]]
 		if len(in_files) == 0:
 			sys.exit(print("No input netCDF(s) at:"+str(p1)))
 
