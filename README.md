@@ -20,7 +20,7 @@ If a directory is given for argument one, a directory must be given for argument
 
 2. **Edit the template(s) to reflect the desired changes to apply when generating output netCDF(s).**       
 See the section below for better explanation of how the template is applied to outputs. Only one template can be given each time you run the script in *edit* mode.     
-  
+
 Changes are applied in a flexible way. Variables in input netCDF(s) that aren't listed in the provided template are simply copied without any changes. Variables in the provided template that don't exist in the input netCDF(s) have no affect on the output(s). For these reasons, you can paste all of the necessary updates for multiple sets of disparate netCDF files into a single template and update all at once unless they share common variable names with incompatible attributes; e.g. two sets of files with different origins for variable *time* cannot be edited with the same template.
 
 3. **Copy data from input netCDF(s) to output netCDF(s), applying changes specified in the input JSON template.**
@@ -76,17 +76,18 @@ The section under `rename` maps the original dimension, group, variable names (k
 ```
 
 #### `permute`
-The `permute` section applies some basic numpy transformations to the arrays for variables in each of the lists. Fore example, variable names listed under `list_variables_invert_y` will have their arrays flipped along the y axis. More to come.
+The `permute` section applies some basic numpy transformations to the arrays for variables in each of the lists. For example, variable names listed under `variables2d_yflip` will have their arrays flipped along the y axis. More to come.
 
 ```{json}
          "permute": {
-            "list_variables_invert_y": [],
-            "list_variables_invert_x": []
+            "variables2d_yflip": [],
+            "variables2d_xflip": [],
+            "variables1d_flip": []
         }, ...
 ```
 
-#### `applyfuncx`
-The `applyfuncx` section allows the user to apply basic arithmetic operations to the variable arrays. This set of options undoubtedly is the biggest source of potential bugs. The idea is that the user can supply any number of basic arithmetic operations as a function of x, where x is the variable array, and those will be applied in that order. Python will attempt to evaluate the input strings as functions to apply to array *x*, and will simply print a failure message to stdout if the input string is incompatible for whatever reason. 
+#### `funcx`
+The `funcx` section allows the user to apply basic arithmetic operations to the variable arrays. This set of options undoubtedly is the biggest source of potential bugs. The idea is that the user can supply any number of basic arithmetic operations as a function of x, where x is the variable array, and those will be applied in that order. Python will attempt to evaluate the input strings as functions to apply to array *x*, and will simply print a failure message to stdout if the input string is incompatible for whatever reason. 
 
 For example, for file to which the template below is applied, the input variable *prcp* will be:
 * multiplied by 10, then
@@ -94,7 +95,7 @@ For example, for file to which the template below is applied, the input variable
 * squared
 
 ```{json}
-        "applyfuncx": {
+        "funcx": {
             "prcp": ["x*10", "x+4", "x*x"],
             "time_bnds": [], ...
         }, ...

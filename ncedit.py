@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-
+import re
 import sys
 import glob
 import json
@@ -21,7 +21,7 @@ class EditNetCDF(object):
 	mimics the structure of the input netCDF [<instance>.structure]. This 
 	structure is placed inside another dictionary [<instance>.template] that 
 	has a few other options for manipulating the data written to the output
-	netCDF. The template is passed as the third argument to the Update function. 
+	netCDF. 
 	"""
 		
 
@@ -69,18 +69,21 @@ class EditNetCDF(object):
 
 	@staticmethod
 	def GetStructure(nc):
-		"""Makes a JSON ( Panoply-like ) representation of netCDF structure."""
-		s = {'dimensions': {}, 'variables': {}, 'groups': {}, 'attributes': {}}
+		"""Makes a JSON (Panoply-like) representation of netCDF structure."""
+		s = {'dimensions':{}, 'variables':{}, 'groups':{}, 'attributes':{}}
 
 		# add dimensions to structure
 		s['dimensions'].update({
-			name: "UNLIMITED" if dim.isunlimited() else dim.size
+			name: {
+				"size": dim.size, "UNLIMITED": True
+			} if dim.isunlimited() else {
+				"size": dim.size, "UNLIMITED": False}
 		for name, dim in nc.dimensions.items()})
 
 		# add variables to structure
 		s['variables'].update({name: {
 			'dimensions': var.dimensions, 
-			'attributes': {att: fmt(getattr(var, att)) for att in var.ncattrs()}	
+			'attributes': {att:fmt(getattr(var,att)) for att in var.ncattrs()}
 		} for name,var in nc.variables.items()})
 
 		# add grouped variables to structure
@@ -89,14 +92,16 @@ class EditNetCDF(object):
 			# get group variables
 			variables = {name: {
 				'dimensions': var.dimensions, 
-				'attributes': {att: fmt(getattr(var, att)) for att in var.ncattrs()}
+				'attributes': {
+					att:fmt(getattr(var,att)) for att in var.ncattrs()}
 			} for name,var in grp.variables.items()}
 
 			# get group attributes
-			attributes = {att: fmt(getattr(name, att)) for att in grp.ncattrs()}
+			attributes = {att:fmt(getattr(name,att)) for att in grp.ncattrs()} 
 
 			# add group to structure
-			s['groups'][name] = {'variables': variables, 'attributes': attributes}
+			s['groups'][name] = {
+				'variables': variables, 'attributes': attributes}
 
 		# add global attributes to structure
 		s['attributes'].update(
@@ -120,15 +125,19 @@ class EditNetCDF(object):
 		structure = OrderedDict([
 			("header", s),
 			("updates", {
-				'rename': {
+				"add_drop": {"add": [], "drop": []},
+				"rename": {
 					"dimensions": {d:d for d in dimensions},
 					"variables": {v:v for v in variables},
-					'groups': {g:g for g in groups}},
+					"groups": {g:g for g in groups}},
 				"permute": {
 					"variables2d_yflip": [],	
 					"variables2d_xflip": [],
 					"variables1d_flip": []},
 				"funcx": {v:[] for v,d in s['variables'].items()},
+				"time": {
+					"in_origin": None,
+					"out_origin": None},
 				"compression_level": 4
 			})
 		])
@@ -138,7 +147,7 @@ class EditNetCDF(object):
 	
 
 	# ------------------------------------------------------------------------
-	# array manipulation
+	# array modifiers
 
 
 	def GetModifiers(self, name, funcs=[]):
@@ -153,7 +162,7 @@ class EditNetCDF(object):
 
 
 	def ApplyFuncs(self, data, funcs):
-		"""Internal use. Takes input data and list of string funcs and apply."""
+		"""Internal use. Takes input data and list of str funcs; applies."""
 		for f in funcs:
 			try:
 				func = eval("lambda x: "+f)
@@ -164,13 +173,65 @@ class EditNetCDF(object):
 
 
 	# ------------------------------------------------------------------------
+	# time modifiers
+
+
+	def tryattr(self, obj, attr): 
+		"""Handles missing attributes gracefully."""
+		try:
+			val = obj.getncattr(attr)
+		except:
+			val = None
+
+
+	def HandleTime(self):
+		"""Time validation and translation (assumes CF compliance)."""
+		try:
+			nctime = self.nc.variables['time']
+			udtime = self.structure['header']['variables']['time']
+		except:
+			print("Time not found in input netCDF and/or template. Skipping.")
+
+		# time translation options
+		timeoptions = self.structure['updates']['time']
+
+		# get the attributes for nctime and udtime
+		nctimeatts, udtimeatts = nctime.ncattrs(), udtime['attributes'].keys()
+
+		# check that, at a minimum, ud template time has:
+		udchecks = dict(
+			iorigin = timeoptions['in_origin'] is not None,
+			oorigin = timeoptions['out_origin'] is not None)
+		
+		# break function if not all options given
+		if not all(udchecks['options']):
+			print("Time options missing/incomplete; no time shifts/edits.")
+		
+		# break function if either time origin is not CF compliant
+		elif not all([
+			timeunitsre.fullmatch(timeoptions['in_origin']), 
+			timeunitsre.fullmatch(timeoptions['out_origin'])]):
+			print("Time units not CF compliant; no time shifts/edits.")
+		
+		# else, proceed
+		else:
+			ioriginl = timeoptions['in_origin'].split("since")
+			ooriginl = timeoptions['out_origin'].split("since")
+
+			icommonunit = ioriginl[0].strip()
+			ocommonunit = ooriginl[0].strip()
+
+			itimestamp = ioriginl[1].strip()
+			otimestamp = ooriginl[1].strip()
+
+			print("Time is incomplete.")
+
+	# ------------------------------------------------------------------------
 	# updaters
 
 
 	def Updater(self):
-		"""
-		"""
-
+		"""Maybe sometimes called externally. Goes through update routine."""
 		# add global attributes
 		self.UpdateGlobalAtts()
 
@@ -250,6 +311,7 @@ class EditNetCDF(object):
 			self.UpdateVars(group.variables, nameprefix=nameprefix)
 
 
+
 def fmt(obj): 
 	"""Value formatter replaces numpy types with base python types."""
 	if isinstance(obj, (str, int, float, complex, tuple, list, dict, set)):
@@ -260,6 +322,11 @@ def fmt(obj):
 		except:
 			out = obj.tolist()
 	return(out)
+
+
+timeunitsre = re.compile(
+	".* since [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
+	".*(2[0-3]|[01][0-9]):[0-5][0-9]:[0-5][0-9].*")
 
 
 # ----------------------------------------------------------------------------
@@ -317,7 +384,8 @@ def args_parser():
 		help="Input netCDF OR directory with netCDFs; optional wildcard.")
 	p.add_argument("out_path", 
 		help="Output directory to write netCDFs.")
-	p.add_argument("in_json", nargs="?", default=None, help="Input JSON template.")
+	p.add_argument("in_json", nargs="?", default=None, 
+		help="Input JSON template.")
 
 	args = p.parse_args()
 
