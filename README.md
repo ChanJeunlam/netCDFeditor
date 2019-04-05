@@ -1,6 +1,32 @@
 # netCDFeditor
 A python script that generates netCDF structure templates in json format and writes new netCDF files.
 
+## usage
+The internals are designed to be as flexible as possible. You may find ways to break the tool, particularly when supplying custom functions to apply to variable arrays, but rest assured that you cannot harm your original copy of the files. Some key points:
+
+* inputs are opened in read-only mode, always; wildcards should work, but hasn't had thorough testing
+* output filenames have *_edit.nc* appended to them unless output filename is specified with argument at position two
+* arguments one and two are always required. both can be either a file or a directory:
+    * two arguments: writes json templates generated for input netCDFs (arg1) to output directory (arg2)
+    * three arguments: copies data from input netCDFs (arg1) to output netCDFs in output directory (arg2) while applying changes specified using the JSON template (arg3; only one allowed)
+
+The script should be used in three steps:
+
+1. Generate templates for input netCDF(s).
+```{shell}
+$ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory>
+```
+If a directory is given for argument one, a directory must be given for argument two; but, a file may be given for argument one and a directory for argument two.       
+
+2. Edit the template(s) to reflect the desired changes to apply when generating output netCDF(s).       
+See the section below for better explanation of how the template is applied to outputs. Only one template can be given each time you run the script in *edit* mode.       
+Changes are applied in a flexible way. Variables in input netCDF(s) that aren't listed in the provided template are simply copied without any changes. Variables in the provided template that don't exist in the input netCDF(s) have no affect on the output(s). For these reasons, you can paste all of the necessary updates for multiple sets of disparate netCDF files into a single template and update all at once unless they share common variable names with incompatible attributes; e.g. two sets of files with different origins for variable *time* cannot be edited with the same template.
+
+3. Copy data from input netCDF(s) to output netCDF(s), applying changes specified in the input JSON template.
+```{shell}
+$ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <input_template>.json
+```
+
 ## format of <template>.json
 ### `header`
 This section under the `header` element of the JSON is primarily for manipulating file structure/metadata associated with the variables. Changes to the attribute names and values in this section will be reflected in the output file. Also, add/remove dimensions associated with a variable; e.g. in the netCDF to which the template below is applied, the variable *lat* will have the value "THE WRONG standard_name" for the *standard_name* attribute.
@@ -71,6 +97,42 @@ For example, for file to which the template below is applied, the input variable
             "prcp": ["x*10", "x+4", "x*x"],
             "time_bnds": [], ...
         }, ...
+```
+
+FYI, these operators have been tested:
+
+```{python}
+>>> import numpy as np
+>>> x = np.array([0,1,2,3,4,5,6,7,8,9])
+
+# addition
+>>> x+10
+array([10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+
+# subtraction
+>>> x-10
+array([-10,  -9,  -8,  -7,  -6,  -5,  -4,  -3,  -2,  -1])
+
+# multiplication
+>>> x*10
+array([ 0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
+
+# division
+>>> x/10
+array([0. , 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9])
+
+# remainder
+>>> x%10
+array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], dtype=int32)
+
+# exponentiation
+>>> x**10
+array([         0,          1,       1024,      59049,    1048576,
+          9765625,   60466176,  282475249, 1073741824, -808182895], dtype=int32)
+
+# floor division
+>>> x//10
+array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=int32)
 ```
 
 #### `other`
