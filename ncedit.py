@@ -123,6 +123,13 @@ def GetTemplate(nc):
 # Editor
 # ----------------------------------------------------------------------------
 
+def GetModifiers(name, permute):
+    return([{
+        "variables2d_yflip": np.flipud,
+        "variables2d_xflip": np.fliplr,
+        "variables1d_flip": lambda x: np.flip(x)
+    }[mod] for mod, vars in permute.items() if name in vars])
+
 def ApplyFuncs(data, funcs):
     """Takes input data and list of str funcs; evals; applies."""
     for f in funcs:
@@ -228,7 +235,7 @@ class EditNetCDF(object):
                 print(name+": no _FillValue in src netCDF; no fill replace.")
 
         # get built-in numpy array modifiers; apply
-        npfuncs = self.GetModifiers(name)
+        npfuncs = GetModifiers(name, self.permute)#npfuncs=self.GetModifiers(name)
         if npfuncs:
             for f in npfuncs:
                 try:
@@ -316,7 +323,7 @@ class EditNetCDF(object):
         dtype=None, data=None, fill=None, prefix=None):
             """Adds variable to output netCDF."""
             
-            # get rename (or old name, whatever); add prefix if group
+            # get new name (or old name, whatever); add prefix if group
             try:
                 newname = self.rename['variables'][name]
                 if prefix:
@@ -359,21 +366,6 @@ class EditNetCDF(object):
             
             # create dimension in output file
             self.ncout.createDimension(newname, size)
-
-            
-  # ------------------------------------------------------------------------
-    # array modifiers
-
-
-    def GetModifiers(self, name, funcs=[]):
-        for modifier, variables in self.permute.items():
-            if name in variables:
-                funcs.append({
-                    "variables2d_yflip": np.flipud,
-                    "variables2d_xflip": np.fliplr,
-                    "variables1d_flip": lambda x: np.flip(x)
-                }[modifier])
-        return(funcs)
 
 
     # ------------------------------------------------------------------------
