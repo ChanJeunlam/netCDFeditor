@@ -5,3 +5,6 @@ ncedit-linux.zip
 ncedit-windows.zip
 *.nc*
 *.json
+tests/
+*.ipynb
+.ipynb_checkpoints/

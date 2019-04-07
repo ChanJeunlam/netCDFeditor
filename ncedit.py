@@ -1,9 +1,13 @@
 #!/usr/bin/python3
+"""Notes:
+* Add CRS variable generator
+"""
 
 import re
 import sys
 import glob
 import json
+import shutil
 import argparse
 import numpy as np
 import netCDF4 as nc4
@@ -11,444 +15,456 @@ import datetime as dt
 from collections import OrderedDict
 from os.path import join, isfile, isdir, basename, splitext
 
-""" --------------------------------------------------------------------------
-Editor class
- --------------------------------------------------------------------------"""
+
+# ----------------------------------------------------------------------------
+# Some random stuff
+# ----------------------------------------------------------------------------
+
+# regular expression for validating input CF units for time
+timeunitsre = re.compile(
+    ".* since [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
+    ".*(2[0-3]|[01][0-9]):[0-5][0-9]:[0-5][0-9].*")
+
+def fmt(obj): 
+    """Value formatter replaces numpy types with base python types."""
+    if isinstance(obj, (str, int, float, complex, tuple, list, dict, set)):
+        out = obj
+    else:                        # else, assume numpy
+        try:
+            out = obj.item()     # try to get value
+        except:
+            out = obj.tolist()   # except, must be np iterable; get list
+    return(out)
+
+def GetTimeUnits(structure):
+    """Gets the value of variable time's 'units' attribute."""
+    try:
+        units = structure["variables"]["time"]["attributes"]["units"]
+        if timeunitsre.fullmatch(units):
+            return(units)
+        else:
+            return(None)
+    except:
+        print("WARN: Unable to get units for variable time.")
+        return(None)
+
+def GetDimensions(nc):
+    """Returns a dictionary describing the dimensions in a netCDF file."""
+    return({name: {
+        "size": dim.size, "UNLIMITED": True} if dim.isunlimited() else {
+        "size": dim.size, "UNLIMITED": False}
+    for name, dim in nc.dimensions.items()})
+
+def GetVariables(nc):
+    """Returns a dictionary describing the variables in a netCDF file."""
+    return({name: {
+        'dimensions': var.dimensions, 
+        'attributes': {att:fmt(getattr(var,att)) for att in var.ncattrs()}
+    } for name,var in nc.variables.items()})
+
+def GetGroups(nc):
+    """Returns a dictionary describing the groups in a netCDF file."""
+    return({name: {
+        'variables': GetVariables(grp), 
+        'attributes': {att:fmt(getattr(name,att)) for att in grp.ncattrs()}
+    } for name, grp in nc.groups.items()})
+
+def GetAttributes(nc):
+    """Returns a dictionary describing the attributes in a netCDF file."""
+    return({att: fmt(getattr(nc, att)) for att in nc.ncattrs()})
+
+def GetStructure(nc):
+    """Makes a JSON (Panoply-like) representation of netCDF structure."""
+    return({
+        'dimensions': GetDimensions(nc), 
+        'variables': GetVariables(nc), 
+        'groups': GetGroups(nc), 
+        'attributes': GetAttributes(nc)})
+
+
+# ----------------------------------------------------------------------------
+# Templater
+# ----------------------------------------------------------------------------
+
+
+def GetTemplate(nc):
+    """Returns the complete EditNetCDF template as json string."""
+
+    # get structure, lists of netCDF object names to make rename table
+    s = GetStructure(nc)
+    dimensions = list(s['dimensions'].keys())
+    groups = list(s['groups'].keys())
+    variables = list(s['variables'].keys())+[
+        s['groups'][g]['variables'].keys() for g in groups]
+
+    return(OrderedDict([
+        ("header", s),
+        ("updates", OrderedDict([
+            ("drop", []),
+            ("rename", {
+                "dimensions": {d:d for d in dimensions},
+                "variables": {v:v for v in variables},
+                "groups": {g:g for g in groups}}),
+            ("time", OrderedDict([
+                ("in_origin", GetTimeUnits(structure)), 
+                ("out_origin", None), 
+                ("time_bnds_offset", None)])),
+            ("permute", OrderedDict([
+                ("variables1d_flip", []), 
+                ("variables2d_xflip", []), 
+                ("variables2d_yflip", [])])),
+            ("funcx", {v:[] for v,d in s['variables'].items()}),
+            ("compression_level", 4)
+        ]))
+    ]))
+
+
+# ----------------------------------------------------------------------------
+# Editor
+# ----------------------------------------------------------------------------
+
+def ApplyFuncs(data, funcs):
+    """Takes input data and list of str funcs; evals; applies."""
+    for f in funcs:
+        try:
+            func = eval("lambda x: "+f)
+            data = func(data)
+        except Exception as e:
+            print("Function "+f+" did not evaluate correctly:")
+            print(e)
+            print("Skipping.\n"+"-"*79)
+    return(data)
+
+def GenerateTimeBnds(netcdf_object, offset):
+    """Takes input array and generates array of tuples."""
+    try:
+        time = ncin.variables['time'][:]
+        return(np.array(list(zip(time-offset, time+offset))))
+    except:
+        print("ERROR: Can't find time variable. Can't gen time_bnds.")
+        return(None)
 
 
 class EditNetCDF(object):
-	"""
-	Takes an input netCDF file and creates a python dictionary structure that 
-	mimics the structure of the input netCDF [<instance>.structure]. This 
-	structure is placed inside another dictionary [<instance>.template] that 
-	has a few other options for manipulating the data written to the output
-	netCDF. 
-	"""
-		
-
-	def __getitem__(self, name):
-		return getattr(self, name)
-	
-
-	def __init__(self, nc=None, updates=None, out=None):	
-		self.nc = nc
-		self.out = out
-		self.updates = updates
-
-		# if: all args passed, run Updater
-		if all([updates,out]):
-
-			# get updates options from updates element of dict
-			self.rename = self.updates['updates']['rename']
-			self.permute = self.updates['updates']['permute']
-			self.funcx = self.updates['updates']['funcx']
-			self.compress = self.updates['updates']['compression_level']
-
-			# get structure from header element of dict
-			self.structure = self.updates['header']
-
-			# write changes to output netCDF
-			self.Updater()
-
-			# close both files
-			self.nc.close()
-			self.out.close()
-		
-		# else if: no args passed, generate structure/template
-		elif not any([updates,out]):
-			self.structure = self.GetStructure(self.nc)
-			self.template = self.GetTemplate(self.structure)
-
-		# else: reserve this condition for custom inputs in the future
-		else:
-			print("Execute some custom functionalities. In the future.")
-		
-
-	# ------------------------------------------------------------------------
-	# static methods, fully functionsl without class instantiation
-
-
-	@staticmethod
-	def GetStructure(nc):
-		"""Makes a JSON (Panoply-like) representation of netCDF structure."""
-		s = {'dimensions':{}, 'variables':{}, 'groups':{}, 'attributes':{}}
-
-		# add dimensions to structure
-		s['dimensions'].update({
-			name: {
-				"size": dim.size, "UNLIMITED": True
-			} if dim.isunlimited() else {
-				"size": dim.size, "UNLIMITED": False}
-		for name, dim in nc.dimensions.items()})
-
-		# add variables to structure
-		s['variables'].update({name: {
-			'dimensions': var.dimensions, 
-			'attributes': {att:fmt(getattr(var,att)) for att in var.ncattrs()}
-		} for name,var in nc.variables.items()})
-
-		# add grouped variables to structure
-		for name, grp in nc.groups.items():
-
-			# get group variables
-			variables = {name: {
-				'dimensions': var.dimensions, 
-				'attributes': {
-					att:fmt(getattr(var,att)) for att in var.ncattrs()}
-			} for name,var in grp.variables.items()}
-
-			# get group attributes
-			attributes = {att:fmt(getattr(name,att)) for att in grp.ncattrs()} 
-
-			# add group to structure
-			s['groups'][name] = {
-				'variables': variables, 'attributes': attributes}
-
-		# add global attributes to structure
-		s['attributes'].update(
-			{att: fmt(getattr(nc, att)) for att in nc.ncattrs()})
-
-		return(s)
-
-
-	@staticmethod
-	def GetTemplate(structure):
-		"""Returns the complete EditNetCDF template as json string."""
-		s = structure
-
-		# get lists of rename-able netCDF elements
-		dimensions = list(s['dimensions'].keys())
-		variables = list(s['variables'].keys())
-		groups = list(s['groups'].keys())
-		for g in groups:
-			variables.extend(list(s['groups'][g]['variables'].keys()))
-		
-		structure = OrderedDict([
-			("header", s),
-			("updates", {
-				"add_drop": {"add": [], "drop": []},
-				"rename": {
-					"dimensions": {d:d for d in dimensions},
-					"variables": {v:v for v in variables},
-					"groups": {g:g for g in groups}},
-				"permute": {
-					"variables2d_yflip": [],	
-					"variables2d_xflip": [],
-					"variables1d_flip": []},
-				"funcx": {v:[] for v,d in s['variables'].items()},
-				"time": {
-					"in_origin": None,
-					"out_origin": None},
-				"compression_level": 4
-			})
-		])
-
-		# combine with other template pieces and return
-		return(structure)
-	
-
-	# ------------------------------------------------------------------------
-	# array modifiers
-
-
-	def GetModifiers(self, name, funcs=[]):
-		for modifier, variables in self.permute.items():
-			if name in variables:
-				funcs.append({
-					"variables2d_yflip": np.flipud,
-					"variables2d_xflip": np.fliplr,
-					"variables1d_flip": lambda x: np.flip(x,0)
-				}[modifier])
-		return(funcs)
-
-
-	def ApplyFuncs(self, data, funcs):
-		"""Internal use. Takes input data and list of str funcs; applies."""
-		for f in funcs:
-			try:
-				func = eval("lambda x: "+f)
-				data = func(data)
-			except Exception as e:
-				print("Function "+f+" did not evaluate correctly:")
-				print(e)
-				print("Skipping."+"-"*79)
-		return(data)
-
-
-	# ------------------------------------------------------------------------
-	# time modifiers
-
-
-	def tryattr(self, obj, attr): 
-		"""Handles missing attributes gracefully."""
-		try:
-			val = obj.getncattr(attr)
-		except:
-			val = None
-
-
-	def HandleTime(self):
-		"""Time validation and translation (assumes CF compliance)."""
-		try:
-			nctime = self.nc.variables['time']
-			udtime = self.structure['header']['variables']['time']
-		except:
-			print("Time not found in input netCDF and/or template. Skipping.")
-
-		# time translation options
-		timeoptions = self.structure['updates']['time']
-
-		# get the attributes for nctime and udtime
-		nctimeatts, udtimeatts = nctime.ncattrs(), udtime['attributes'].keys()
-
-		# check that, at a minimum, ud template time has:
-		udchecks = dict(
-			iorigin = timeoptions['in_origin'] is not None,
-			oorigin = timeoptions['out_origin'] is not None)
-		
-		# break function if not all options given
-		if not all(udchecks['options']):
-			print("Time options missing/incomplete; no time shifts/edits.")
-		
-		# break function if either time origin is not CF compliant
-		elif not all([
-			timeunitsre.fullmatch(timeoptions['in_origin']), 
-			timeunitsre.fullmatch(timeoptions['out_origin'])]):
-			print("Time units not CF compliant; no time shifts/edits.")
-		
-		# else, proceed
-		else:
-			ioriginl = timeoptions['in_origin'].split("since")
-			ooriginl = timeoptions['out_origin'].split("since")
-
-			icommonunit = ioriginl[0].strip()
-			ocommonunit = ooriginl[0].strip()
-
-			itimestamp = ioriginl[1].strip()
-			otimestamp = ooriginl[1].strip()
-
-			print("Time is incomplete.")
-
-	# ------------------------------------------------------------------------
-	# updaters
-
-
-	def Updater(self):
-		"""Maybe sometimes called externally. Goes through update routine."""
-		# add global attributes
-		self.UpdateGlobalAtts()
-
-		# add dimensions
-		self.UpdateDims()
-
-		# add root-group (ungrouped) variables
-		self.UpdateVars(self.nc.variables)
-
-		# add grouped variables
-		self.UpdateGroups()
-
-
-	def UpdateGlobalAtts(self):
-		"""Internal use. Copy global attributes all at once via dictionary."""
-		self.out.setncatts(self.structure['attributes'])
-
-
-	def UpdateDims(self):
-		"""Internal use. Create new dimensions in output netCDF."""
-		for name, dimension in self.nc.dimensions.items():
-			newname = self.rename['dimensions'][name]
-			if self.structure["dimensions"][name]["UNLIMITED"]:
-				size = None
-			else:
-				size = len(dimension)
-			#	size = (len(dimension) if not dimension.isunlimited() else None)
-			
-			
-			self.out.createDimension(newname, size)
-
-
-	def UpdateVars(self, variables, nameprefix=None):
-		"""Internal use. Copy/edit variables on their way to output netCDF."""
-		for name, variable in variables.items():
-			if nameprefix:
-				newname = nameprefix+self.rename['variables'][name]
-			else:
-				newname = self.rename['variables'][name]
-			
-			data = variable[:]
-			attributes = self.structure['variables'][name]['attributes']
-
-			# apply numpy array modifiers
-			npfuncs = self.GetModifiers(name)
-			if npfuncs:
-				for f in npfuncs:
-					data = f(data)
-			# apply functionx user arithmetic funcs
-			strfuncs = self.funcx[name]
-			if strfuncs:
-				data = self.ApplyFuncs(data, strfuncs)
-
-			# apply fill value if it exists
-			if "_FillValue" in attributes.keys():
-				fill = attributes['_FillValue']
-				srcfill = variable.__dict__['_FillValue']
-				data[data==srcfill] = fill
-				del attributes['_FillValue']
-			else:
-				fill=None
-
-			# finally, make output variable
-			self.out.createVariable(
-				newname, variable.datatype, variable.dimensions,
-				zlib=True, complevel=self.compress, fill_value=fill)
-			self.out[newname].setncatts(attributes)
-			self.out[newname][:] = data
-
-
-	def UpdateGroups(self):
-		"""Internal use. Copy/edit grouped variables to output netCDF."""
-		for name, group in self.nc.groups.items():
-			newname = self.rename['groups'][name]
-			
-			# make group in output file
-			self.out.createGroup(newname)
-
-			# a prefix to add to variable names
-			nameprefix = "/"+newname+"/"
-
-			# add variables to group
-			self.UpdateVars(group.variables, nameprefix=nameprefix)
-
-
-
-def fmt(obj): 
-	"""Value formatter replaces numpy types with base python types."""
-	if isinstance(obj, (str, int, float, complex, tuple, list, dict, set)):
-		out = obj
-	else:
-		try:
-			out = obj.item()
-		except:
-			out = obj.tolist()
-	return(out)
-
-
-timeunitsre = re.compile(
-	".* since [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
-	".*(2[0-3]|[01][0-9]):[0-5][0-9]:[0-5][0-9].*")
+    """The big kahuna."""
+
+    def __init__(self, ncin=None, ncout=None, template=None):    
+        self.ncin = ncin
+        self.ncout = ncout
+        self.template = template
+           
+        # get structure from header element of dict
+        self.structure = self.template['header']
+            
+        # get updates options from updates element of template
+        self.drop = self.template['updates']['drop']
+        self.rename = self.template['updates']['rename']
+        self.time = self.template['updates']['time']
+        self.permute = self.template['updates']['permute']
+        self.funcx = self.template['updates']['funcx']
+        self.compress = self.template['updates']['compression_level']
+
+        # write all changes to output netCDF
+        self.Updater()
+
+    def __getitem__(self, name):
+        return getattr(self, name)
+        
+    # ------------------------------------------------------------------------
+    # updaters
+
+
+    def Updater(self):
+        """Goes through update routine."""
+        # add global attributes
+        self.WriteGlobalAttributes()
+
+        # add dimensions
+        self.WriteDimensions()
+
+        # add root-group (ungrouped) variables; skip if in drop list
+        for name, variable in self.ncin.variables.items():           
+            if name not in self.drop:
+                self.UpdateVariable(name, variable)
+
+        # add grouped variables
+        for name, group in self.ncin.groups.items():
+            self.UpdateGroup(name, group)       
+
+        # handle other miscellaneous updates
+        #self.UpdatesMisc()
+
+
+    # def UpdateMisc(self):
+    #     """Random updates triggered by user input."""
+
+    #     # add/update time_bnds if user says so
+    #     if self.time["time_bnds_offset"]:
+    #         offset = self.time["time_bnds_offset"]
+    #         time_bnds = GenerateTimeBnds(self.ncin, offset)
+    #         try:
+    #             if "time_bnds" in self.ncin.variables:
+    #                 self.ncin.variables["time_bnds"] = time_bnds
+    #             else:
+    #                 self.WriteVariable( 
+    #                     self, name, dimensions, {
+    #                         "time": "days since 1980-01-01 00:00:00 UTC"
+    #                     }, dtype=None, 
+    #                     data=None, fill=None, prefix=None)
+    
+
+    def UpdateArray(self, name, variable, fill=None):
+        """Internal use. Edit input array."""
+
+        # get input netCDF variable's underlying numpy array
+        data = variable[:]
+
+        # if fill value is supplied, try to get old fill value
+        if fill:
+            try:
+                srcfill = variable.__dict__['_FillValue']
+                data[data==srcfill] = fill   # replace srcfill with fill
+            except:
+                print(name+": no _FillValue in src netCDF; no fill replace.")
+
+        # get built-in numpy array modifiers; apply
+        npfuncs = self.GetModifiers(name)
+        if npfuncs:
+            for f in npfuncs:
+                try:
+                    data = f(data)
+                except Exception as e:
+                    print("Failed to apply permute: "+str(f)+". Skipping.")
+                    print(e)
+
+        # apply updates['funcx'] user-defined string funcs
+        strfuncs = self.funcx[name]
+        if strfuncs:
+            data = ApplyFuncs(data, strfuncs)
+
+        return(data)
+
+
+    def UpdateVariable(self, name, variable):
+        """Internal use. Copy/edit variable to output netCDF."""
+
+        # get template variables for group; get dimensions, attributes
+        template = self.structure['variables'][name]
+        attributes = template['attributes']
+        dimensions = template['dimensions']
+
+        # get and drop fill from output attributes, if exists
+        if '_FillValue' in attributes.keys():
+            fill = attributes['_FillValue']
+            del attributes['_FillValue']
+        else:
+            fill = None
+
+        # update data array to reflect changes specified in template
+        data = self.UpdateArray(name, variable, fill=fill)
+
+        # add variable to output netCDF
+        self.WriteVariable(
+            name, dimensions, attributes, 
+            dtype=variable.datatype, data=data, fill=fill)
+
+
+    def UpdateGroup(self, name, group):
+        """Internal use. Copy/edit grouped variables to output netCDF."""
+
+        # get template variables for group
+        variables = self.structure['groups'][name]
+
+        # get new (or old) group name from input json
+        groupname = self.rename['groups'][name]
+        
+        # make group in output file
+        self.ncout.createGroup(groupname)
+
+        # a prefix will be added to variable names; netCDF4-python req
+        nameprefix = "/"+groupname+"/"
+
+        # iterate over group's variables in input netCDF
+        for variablename, variable in group.items():
+
+            # get input netCDF variable data type
+            dtype = variable.datatype
+
+            # get dimensions, attributes given in template
+            attributes = variables[variablename]['attributes']
+            dimensions = variables[variablename]['dimensions']
+
+            # get and drop fill from output attributes, if exists
+            if '_FillValue' in attributes.keys():
+                fill = attributes['_FillValue']
+                del attributes['_FillValue']
+            else:
+                fill = None
+
+            # update data array to reflect changes specified in template
+            data = self.UpdateArray(name, variable, fill=fill)
+
+            # add variable to output netCDF group
+            self.WriteVariable(
+                variablename, dimensions, attributes, 
+                dtype=dtype, data=data, fill=fill, prefix=nameprefix)
+
+
+    # use byte dtype for default (testing add vars not in source netCDF)
+    def WriteVariable( 
+        self, name, dimensions, attributes, 
+        dtype=None, data=None, fill=None, prefix=None):
+            """Adds variable to output netCDF."""
+            
+            # get rename (or old name, whatever); add prefix if group
+            try:
+                newname = self.rename['variables'][name]
+                if prefix:
+                    newname = prefix+newname
+            except:
+                print("INFO: Output variable "+name+" has no rename entry.")
+                newname = name
+
+            # make output variable; add attributes;
+            try:                
+                self.ncout.createVariable( 
+                    newname, dtype, dimensions, zlib=True, 
+                    complevel=self.compress, fill_value=fill)
+                self.ncout[newname].setncatts(attributes)
+                self.ncout[newname][:] = data
+
+            except Exception as e:
+                print("WARNING: Failed to write variable: "+newname)
+                print(e)
+                print("Skipping.\n"+"-"*79)
+
+
+    def WriteGlobalAttributes(self):
+        """Internal use. Copy global attributes all at once via dictionary."""
+        self.ncout.setncatts(self.structure['attributes'])
+
+
+    def WriteDimensions(self):
+        """Internal use. Create new dimensions in output netCDF."""
+
+        # iterate over input dimensions. check template for rename
+        for name, dimension in self.ncin.dimensions.items():
+            newname = self.rename['dimensions'][name]
+            
+            # None if dim['UNLIMITED'] is true in input template; else size
+            if self.structure["dimensions"][name]["UNLIMITED"]:
+                size = None
+            else:
+                size = len(dimension)
+            
+            # create dimension in output file
+            self.ncout.createDimension(newname, size)
+
+            
+  # ------------------------------------------------------------------------
+    # array modifiers
+
+
+    def GetModifiers(self, name, funcs=[]):
+        for modifier, variables in self.permute.items():
+            if name in variables:
+                funcs.append({
+                    "variables2d_yflip": np.flipud,
+                    "variables2d_xflip": np.fliplr,
+                    "variables1d_flip": lambda x: np.flip(x)
+                }[modifier])
+        return(funcs)
+
+
+    # ------------------------------------------------------------------------
+    # strictly internal, of no use outside script
+
+    def _findv(self, name):
+        """Search template header section for variable; returns if exists."""
+        
+        # check if variable is in root group; if so, return; 
+        inroot = name in self.structure['variables'].keys()
+        if inroot:
+            return(())
 
 
 # ----------------------------------------------------------------------------
-# script mode functions
+# Use as script
 # ----------------------------------------------------------------------------
 
-bugnotice = "You found a bug. Please tell Jack."
-getfout = lambda f,p2,tail: join(p2, splitext(basename(f))[0]+tail)
-
-
-def rw_handler(f, mode="r"):
-	"""Handles netCDF read failures gracefully. Also opens for writing."""
-	try:
-		nc = nc4.Dataset(f, mode)
-	except: 
-		print("Failed to read netCDF: "+str(f))
-		nc = None
-	return(nc)
-
-
-def template_mode(nc, jsout, *args):
-	"""Called when two arguments received. Writes json templates."""
-	editor = EditNetCDF(nc)
-	try:
-		with open(jsout, "w") as j:
-			json.dump(editor.template, j, indent=4)
-	except:
-		print("Error>Failed to write JSON template for: "+basename(f))
-
-
-def editor_mode(ncin, fileout, js):
-	"""Called when three arguments received. Writes edited netCDFs."""
-	
-	# read input json template
-	try:
-		with open(js, "r") as j:
-			ud = json.load(j)
-	except:
-		sys.exit(print("Error>Failed to read JSON: "+str(js)+". Exit."))
-
-	# open output netCDF
-	ncout = rw_handler(fileout, mode="w")
-
-	# apply changes via EditNetCDF
-	EditNetCDF(ncin, ud, ncout)
+scripthelp = """
+Help text goes here.
+"""
 
 
 def args_parser():
-	"""Args_handler: argument parsing for editnc.py."""
+    """Args_handler: argument parsing for editnc.py."""
 
-	p = argparse.ArgumentParser(
-		description="""I will write some help here.""",
-		formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-	p.add_argument("in_path", 
-		help="Input netCDF OR directory with netCDFs; optional wildcard.")
-	p.add_argument("out_path", 
-		help="Output directory to write netCDFs.")
-	p.add_argument("in_json", nargs="?", default=None, 
-		help="Input JSON template.")
+    # init argparse parser class; add 3 positional args; 1 req, 2 opt, 3 opt
+    p = argparse.ArgumentParser(
+        description=scripthelp,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("ncin", help="Input netCDF")
+    p.add_argument("ncout", nargs="?", default=None, help="Output netCDF")
+    p.add_argument("jsin", nargs="?", default=None, help="Input JSON")
+    args = p.parse_args()
 
-	args = p.parse_args()
+    # determine template mode or edit mode based on number of arguments
+    ncin, ncout, jsin = args.ncin, args.ncout, args.jsin
 
-	### CHECK OPTIONAL ARGUMENT 3
-	j = args.in_json
-	if j:
-		tail = "_edit.nc"
-		mode = editor_mode
-	else:
-		tail = ".json"
-		mode = template_mode
+    # check argument 1: input netCDF
+    try:
+        input_dataset = nc4.Dataset(ncin)
+    except:
+        sys.exit(print("ERROR: Invalid file passed to arg 1. Exiting."))
+        print(scripthelp)
 
-	### CHECK ARGUMENTS 1 AND 2
-	p1, p2 = args.in_path, args.out_path
-	
-	# if argument 1 is neither a file nor a path, raise e; 
-	if not any([isfile(p1), isdir(p1)]):
-		sys.exit(print("Invalid file/path passed to arg 1. Exiting."))
-	
-	# same for 2;
-	elif not any([isfile(p2), isdir(p2)]):
-		sys.exit(print("Invalid file/path passed to arg 2. Exiting."))
-	
-	# if arg 1 is a dir, arg 2 must also be a dir
-	elif all([isdir(p1), isfile(p2)]):
-		sys.exit(print("Arg 2 must be directory if arg 1 is a directory."))
-		
-	# if arg 1 is a file and arg 2 is a dir
-	elif all([isfile(p1), not isdir(p2)]):
-		jobs = [(p1, p2, j)]
+    # if argument 3 exists, check argument 2: output netCDF
+    if jsin:
+        # if argument 2 is a dir, make output filename from arg1
+        if isdir(ncout):
+            ncout = ncout+"/"+basename(splitext(ncin)[0])+"_edit.nc"
+            print("INFO: Argument 2 is a directory, saving as: "+ncout)
 
-	# else glob p1, append _edit to outputs
-	else:
-		p1g = p1 if any(["nc" in p1,"*" in p1]) else p1+"/*.nc"
-		in_files = [f for f in glob.glob(p1g) if "nc" in splitext(f)[1]]
-		if len(in_files) == 0:
-			sys.exit(print("No input netCDF(s) at:"+str(p1)))
+        # try to open output
+        try:
+            output_dataset = nc4.Dataset(ncout, "w")
+        except:
+            sys.exit(print("ERROR: Failed to read arg2. Exiting."))
+            print(scripthelp)
 
-		# get jobs (tuples of input, output pairs)
-		jobs = [(f, getfout(f, p2, tail), j) for f in in_files]
+        # try to open json template
+        try:
+            with open(jsin, "r") as j:
+                template = json.load(j)
+        except:
+            sys.exit(print("ERROR: Failed to read arg3. Exit."))
+            print(scripthelp)
 
-	# return two values: list of jobs (tuples) and mode function 
-	return(jobs, mode)
+    else:
+        output_dataset = None
+        template = splitext(ncin)[0]+".json"
+
+    return(input_dataset, output_dataset, template)
 
 
 if __name__ == '__main__':
-	
-	# handle arguments, validate
-	jobs, mode = args_parser()
-		
-	for j in jobs:
-		
-		# open input netCDF
-		nc = rw_handler(j[0])
+    
+    # handle arguments, validate; return open file(s)
+    input_dataset, output_dataset, template = args_parser()
+    
+    # if no args 2, write json template
+    if output_dataset is None:
+        structure = GetStructure(input_dataset)
+        output_template = GetTemplate(structure)
+        with open(template, "w") as j:
+            json.dump(output_template, j, indent=4)
 
-		# pass to job function
-		mode(nc, j[1], j[2])
+    # else, write changes to output netCDF
+    else:
+        # pass to job function
+        editor = EditNetCDF(input_dataset, output_dataset, template)
+
+        # close input and output netCDFs
+        input_dataset.close()
+        output_dataset.close()

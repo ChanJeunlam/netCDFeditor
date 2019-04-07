@@ -29,7 +29,7 @@ $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <
 ```
 
 ## Guidance about `<template>.json`
-```
+```{json}
 {                # A FEW USAGE MANDATES: Dimensions, variables, groups should be renamed using "updates": {"rename": {}}
 	"header": {                     # never modify the names of top-level groups "header" or "updates"
 		"dimensions": {             # never modify the "netCDF object type"; i.e. "dimensions", "variables", etc.
