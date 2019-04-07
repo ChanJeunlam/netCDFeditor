@@ -19,22 +19,23 @@ from os.path import join, isfile, isdir, basename, splitext
 # ----------------------------------------------------------------------------
 # Handle time
 # ----------------------------------------------------------------------------
+    
+
+def month_bnds(x, length=None):
+    """Return tuple of month_bnds for input datetime. Length unused."""
+    return((x.replace(day=1), x.replace(day=monthrange(x.year, x.month)[1])))
+
+
+def day_bnds(x, length, offset=0.5):
+    """Return tuple of day_bnds for input datetime. Length required."""
+    off = dt.timedelta(days=length.days*offset)
+    return((x-off, x+off))
+
 
 # regular expressions for validating input CF units for time
 timeunitsre = re.compile(
     ".* since [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])"
     ".*(2[0-3]|[01][0-9]):[0-5][0-9]:[0-5][0-9].*")
-    
-
-def month_bnds(x):
-    """Return tuple of month_bnds for input datetime."""
-    return((x.replace(day=1), x.replace(day=monthrange(x.year, x.month)[1])))
-
-
-def day_bnds(x, length, offset=0.5):
-    """Return tuple of day_bnds for input datetime."""
-    off = dt.timedelta(days=length*offset)
-    return((x-off, x+off))
 
 # Functions for generating time bounds from input numpy arrays
 GetTimeBnds = {
@@ -66,26 +67,29 @@ def ConvertTime(netcdf_object, time_options):
     in_units = time_options['in_units']
     in_origin = in_units.split("since")[1].strip()[:19]
     in_datetime = dt.datetime.strptime(in_origin, "%Y-%m-%d %H:%M:%S")
-    in_time_dt = nc4.num2date(in_time[:], in_units, calendar="standard")
+    time_dt = nc4.num2date(in_time[:], in_units, calendar="standard")
     
     out_units = time_options['out_units']
     #out_common_units = out_units.split("since")[0]
     out_origin = out_units.split("since")[1].strip()[:19]
     out_datetime = dt.datetime.strptime(out_origin, "%Y-%m-%d %H:%M:%S")
 
-    time_shift = in_datetime-out_datetime
-    out_time_dt = in_time_dt-time_shift
+    shift = time_options["shift_time"]
+    if shift:
+        time_shift = in_datetime-out_datetime
+        time_dt = time_dt-time_shift
 
     bnds = time_options["set_time_bnds"]
     if bnds:
-        lo, hi = GetTimeBnds[bnds](out_time_dt)
-        lo = [nc4.date2num(t, out_units) for t in lo]
-        hi = [nc4.date2num(t, out_units) for t in hi]
-        out_time_bnds = [t for t in zip(lo, hi)]
+        length = time_dt[1]-time_dt[0]
+        lo, hi = GetTimeBnds[bnds](time_dt, length)
+        out_time_bnds = [t for t in zip(
+            [nc4.date2num(t, out_units) for t in lo], 
+            [nc4.date2num(t, out_units) for t in hi])]
     else:
         out_time_bnds = None
 
-    out_time = nc4.date2num(out_time_dt, out_units)
+    out_time = nc4.date2num(time_dt, out_units)
     return(out_time, out_time_bnds)
 
 
@@ -182,7 +186,8 @@ def GetTemplate(nc):
                 "groups": {g:g for g in groups}}),
             ("time", OrderedDict([
                 ("in_units", GetTimeUnits(s)), 
-                ("out_units", None), 
+                ("out_units", None),
+                ("shift_time", None),  
                 ("set_time_bnds", None)])),
             ("permute", OrderedDict([
                 ("variables1d_flip", []), 
@@ -284,7 +289,7 @@ class EditNetCDF(object):
         if out_time_bnds:
             try:
                 self.ncout.variables["time_bnds"][:] = out_time_bnds
-                self.ncout.variables["time_bnds"].units = out_units
+                self.ncout.variables["time_bnds"].time = out_units
             except:
                 #self.ncout.createDimension("nv", 2)
                 self.WriteVariable(
