@@ -106,7 +106,7 @@ def GetTemplate(nc):
                 "variables": {v:v for v in variables},
                 "groups": {g:g for g in groups}}),
             ("time", OrderedDict([
-                ("in_origin", GetTimeUnits(structure)), 
+                ("in_origin", GetTimeUnits(s)), 
                 ("out_origin", None), 
                 ("time_bnds_offset", None)])),
             ("permute", OrderedDict([
@@ -450,13 +450,12 @@ def args_parser():
 
 if __name__ == '__main__':
     
-    # handle arguments, validate; return open file(s)
+    # handle arguments, validate; return open file(s) # C:\Users\jjmcn\git\netCDFeditor\ncedit.py
     input_dataset, output_dataset, template = args_parser()
-    
+
     # if no args 2, write json template
     if output_dataset is None:
-        structure = GetStructure(input_dataset)
-        output_template = GetTemplate(structure)
+        output_template = GetTemplate(input_dataset)
         with open(template, "w") as j:
             json.dump(output_template, j, indent=4)
 
