@@ -280,22 +280,23 @@ class EditNetCDF(object):
     def UpdateTime(self):
         """Time validation and translation (assumes CF compliance)."""
 
-        # time translation/conversion
-        out_time, out_time_bnds = ConvertTime(self.ncin, self.time)
+        # time translation/conversion; THIS IS DONE LAST, SO USE OUTPUT TIME
+        out_time, out_time_bnds = ConvertTime(self.ncout, self.time)
         out_units = self.time["out_units"]
 
-        if out_time:
+        if out_time is not None:
             self.ncout.variables["time"][:] = out_time
             self.ncout.variables["time"].units = out_units
         
-        if out_time_bnds:
+        if out_time_bnds is not None:
             try:
                 self.ncout.variables["time_bnds"][:] = out_time_bnds
                 self.ncout.variables["time_bnds"].time = out_units
             except:
-                #self.ncout.createDimension("nv", 2)
+                if "nv" not in self.ncout.dimensions:
+                    self.ncout.createDimension("nv", 2)
                 self.WriteVariable(
-                    "time_bnds", ("time","nv"), {"units": out_units}, 
+                    "time_bnds", ("time","nv"), {"time": out_units}, 
                     dtype="f4", data=out_time_bnds)
 
 

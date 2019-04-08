@@ -123,7 +123,7 @@ For example, variable names listed under `variables2d_yflip` will have their arr
         "permute": {
             "variables1d_flip": ["time"],  # time variable array will be flipped
             "variables2d_xflip": [],
-            "variables2d_yflip": ["lat"]   # two-dimensional lat variable array will be flipped vertically
+            "variables2d_yflip": ["lat"]   # two-dimensional lat array will be flipped vertically
         }, ...
 ```
 
