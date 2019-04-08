@@ -12,45 +12,51 @@ A python script that generates netCDF structure templates in json format and wri
 
 The script should be used in three steps:
 
-1. **Generate templates for input netCDF(s).**
+1. **Generate templates for input netCDF.**
 ```{shell}
-$ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory>
+$ [python3] ncedit.py <input>.nc
 ```
-If a directory is given for argument one, a directory must be given for argument two; but, a file may be given for argument one and a directory for argument two.       
 
-2. **Edit the template(s) to reflect the desired changes to apply when generating output netCDF(s).**       
-See the section below for better explanation of how the template is applied to outputs. Only one template can be given each time you run the script in *edit* mode.     
+2. **Edit the template to reflect the desired changes to output netCDF.**       
+Changes are applied in a flexible way. Variables in the input netCDF that aren't listed in the template passed with argument 2 are simply copied without any changes. Variables in the template that don't exist in the output netCDF have no effect. See the section below for a better explanation. 
 
-Changes are applied in a flexible way. Variables in input netCDF(s) that aren't listed in the provided template are simply copied without any changes. Variables in the provided template that don't exist in the input netCDF(s) have no affect on the output(s). For these reasons, you can paste all of the necessary updates for multiple sets of disparate netCDF files into a single template and update all at once unless they share common variable names with incompatible attributes; e.g. two sets of files with different origins for variable *time* cannot be edited with the same template.
-
-3. **Copy data from input netCDF(s) to output netCDF(s), applying changes specified in the input JSON template.**
+3. **Copy data from input netCDF to output netCDF (argument 3), applying changes specified in the JSON template (argument 2).**
 ```{shell}
-$ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <input_template>.json
+$ [python3] ncedit.py <input>.nc <template>.json <output_netCDF_or_directory>
 ```
 
 ## Guidance about `<template>.json`
+
+A few mandates for use:
+* never modify the names of top-level groups "header" or "updates"; dimensions, variables, groups should be renamed using "updates": {"rename": {}}
+* never modify the "netCDF object type"; i.e. "dimensions", "variables", etc.
+* never modify the name of a dimension, variable, or group in the "header" section
+
+
+### `header` section of json
+
 ```{json}
-{                # A FEW USAGE MANDATES: Dimensions, variables, groups should be renamed using "updates": {"rename": {}}
-	"header": {                     # never modify the names of top-level groups "header" or "updates"
-		"dimensions": {             # never modify the "netCDF object type"; i.e. "dimensions", "variables", etc.
-			"lon": {                # never modify the name of a dimension, variable, or group in the "header" section
+{
+	"header": {
+		"dimensions": {
+			"lon": {
 				"size": 1000,                  
 				"UNLIMITED": false
-			},                      			  # Some tips about the dimensions:
-			"lat": {                    			  ~ Changes to "size" and "UNLIMITED" elements will 
-				"size": 1000,                         ~  be reflected in outputs. Changes to "size" will
-				"UNLIMITED": false                    ~  rare. Set "UNLIMITED" to true to make the dim
-			},                                        ~  unlimited in the output netCDF(s).
+			},                        # Some tips about the dimensions:
+			"lat": {                    ~ Changes to "size" and "UNLIMITED" elements will 
+				"size": 1000,           ~  be reflected in outputs. Changes to "size" will
+				"UNLIMITED": false      ~  rare. Set "UNLIMITED" to true to make the dim
+			},                          ~  unlimited in the output netCDF(s).
 			"time": {
 				"size": 12,
 				"UNLIMITED": true
 			}
 		},
-		"variables": {              			  # Some tips about the variables:
-			"lon": {                				  ~ remember: do not rename variables using the "header" section
-				"dimensions": [     				  ~ Only in rare circumstances will you want to change dimensions for variable. 
-					"lon"           				  ~  Changes made under "dimensions" WILL be reflected in output and break 
-				],                                    ~  variables.
+		"variables": {             # Some tips about the variables:
+			"lon": {                	~ remember: do not rename variables using the "header" section
+				"dimensions": [     	~ Only in rare circumstances will you want to change dimensions for variable. 
+					"lon"           	~ Changes under "dimensions" WILL be reflected in output and break variables.
+				],                   
 				"attributes": {                   # Some tips about variable attributes:
 					"units": "degrees_east",          ~ Attribute names and values are edited under "attributes". You can add,
 					"standard_name": "longitude",     ~  remove, edit as many attributes as you want in this section. This 
@@ -58,12 +64,12 @@ $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <
 				}                                     ~  the collection of attributes for this variable in the input netCDF(s).
 			},
 		"groups": {},
-		"attributes": {                           # Some tips about global attributes:
-			"title": "",                              ~ Everything said above about variable attributes applies to global attributes.
-			"institution": "",                        ~  The attributes listed here will replace the global attributes in the input
-			"source": "",                             ~  netCDFs. In the future you will be able to pass as an argument your own global 
-			"conventions": "CF-1.6"                   ~  attributes "template" that will automatically be added to the ncedit.py 
-		}                                             ~  template(s; like this one) as they are generated.
+		"attributes": {            # Some tips about global attributes:
+			"title": "",                ~ Everything said above about variable attributes applies to global attributes.
+			"institution": "",          ~ The attributes listed here will replace the global attributes in the input
+			"source": "",               ~  netCDFs. In the future you will be able to pass as an argument your own global 
+			"conventions": "CF-1.6"     ~  attributes "template" that will automatically be added to the ncedit.py 
+		}                               ~  template(s; like this one) as they are generated.
 	}, 
 	...
 }
@@ -72,43 +78,17 @@ $ [python3] ncedit.py <input_netCDF_or_directory> <output_netCDF_or_directory> <
 More details about the `updates` section of the `<template>.json` will be added soon...
 
 
-----------------------------------------------------------
-
-## Further explanation of format of <template>.json
-### `header`
-This section under the `header` element of the JSON is primarily for manipulating file structure/metadata associated with the variables. Changes to the attribute names and values in this section will be reflected in the output file. Also, add/remove dimensions associated with a variable; e.g. in the netCDF to which the template below is applied, the variable *lat* will have the value "THE WRONG standard_name" for the *standard_name* attribute.
-
-```{json}
-{
-    "header": {
-        "variables": {
-            "lat": {
-                "attributes": {
-                    "standard_name": "THE WRONG standard_name",
-                    "units": "degrees_north",
-                    "long_name": "latitude coordinate"
-                },
-                "dimensions": [
-                    "y",
-                    "x"
-                ]
-            } ...,
-		},
-		"dimensions": { ... },
-		"attributes": { ... } 
-```
-
-### `updates`
+### `updates` section of json
 The `updates` section is for changes to the output that can't be specified in the header element for one reason or another. For example, dims, groups, variables can't be renamed using the header because the names are used to index the variables in the source netCDF during the copy to the destination netCDF. 
 
 #### `rename`
-The section under `rename` maps the original dimension, group, variable names (key) to the desired names (value) in the output file. For example, for file to which the template below is applied, the input variable *prcp* will be renamed to *PRECIPITATION* in the output file.
+The section under `rename` maps the original dimension, group, variable names (key) to the desired names (value) in the output file. For example, for file to which the template below is applied, the  file.
 
 ```{json}
     "updates": {
         "rename": {
             "variables": {
-                "prcp": "PRECIPITATION",   
+                "prcp": "PRECIPITATION",   # variable *prcp* will be renamed to *PRECIPITATION* in output
                 "time_bnds": "time_bnds",
                 "lat": "lat", ...
             },
@@ -121,14 +101,29 @@ The section under `rename` maps the original dimension, group, variable names (k
         }, ...
 ```
 
-#### `permute`
-The `permute` section applies some basic numpy transformations to the arrays for variables in each of the lists. For example, variable names listed under `variables2d_yflip` will have their arrays flipped along the y axis. More to come.
+#### `time`
+The `time` section provides some options for basic manipulations of data under the variable time. All of these take string inputs.
 
 ```{json}
-         "permute": {
-            "variables2d_yflip": [],
+        "time": {
+            "in_units": null,      # CF units for time in input file; will be pre-populated if exist in input file
+            "out_units": null,     # CF units for time in output file; time conversion will occur if valid
+            "shift_time": null,    # NOT FULLY IMPLEMENTED
+            "set_time_bnds": null  # generates time_bnds and adds variable, or replaces old time_bnds; valid inputs: "days" or "months"
+        }, ...
+```
+
+
+#### `permute`
+The `permute` section applies some basic numpy transformations to the arrays for variables in each of the lists. 
+
+For example, variable names listed under `variables2d_yflip` will have their arrays flipped along the y axis. More to come.
+
+```{json}
+        "permute": {
+            "variables1d_flip": ["time"],  # time variable array will be flipped
             "variables2d_xflip": [],
-            "variables1d_flip": []
+            "variables2d_yflip": ["lat"]   # two-dimensional lat variable array will be flipped vertically
         }, ...
 ```
 

@@ -48,49 +48,49 @@ def ConvertTime(netcdf_object, time_options):
 
     if not all([time_options["in_units"], time_options["out_units"]]):
         print("INFO: No time conversion specified. Skipping.")
-        return(None)
+        return(None, None)
 
     elif not all([
         timeunitsre.fullmatch(time_options['in_units']), 
         timeunitsre.fullmatch(time_options['out_units'])]):
         print("INFO: Input time units not CF compliant; no conversion.")
-        return(None)
+        return(None, None)
 
     else:
         try:
             in_time = netcdf_object.variables["time"]
         except:
             print("INFO: Time not found in input netCDF; no conversion.")
-            return(None)
+            return(None, None)
 
-    # add other calendar options to code later
-    in_units = time_options['in_units']
-    in_origin = in_units.split("since")[1].strip()[:19]
-    in_datetime = dt.datetime.strptime(in_origin, "%Y-%m-%d %H:%M:%S")
-    time_dt = nc4.num2date(in_time[:], in_units, calendar="standard")
-    
-    out_units = time_options['out_units']
-    #out_common_units = out_units.split("since")[0]
-    out_origin = out_units.split("since")[1].strip()[:19]
-    out_datetime = dt.datetime.strptime(out_origin, "%Y-%m-%d %H:%M:%S")
+        # add other calendar options to code later
+        in_units = time_options['in_units']
+        in_origin = in_units.split("since")[1].strip()[:19]
+        in_datetime = dt.datetime.strptime(in_origin, "%Y-%m-%d %H:%M:%S")
+        time_dt = nc4.num2date(in_time[:], in_units, calendar="standard")
+        
+        out_units = time_options['out_units']
+        #out_common_units = out_units.split("since")[0]
+        out_origin = out_units.split("since")[1].strip()[:19]
+        out_datetime = dt.datetime.strptime(out_origin, "%Y-%m-%d %H:%M:%S")
 
-    shift = time_options["shift_time"]
-    if shift:
-        time_shift = in_datetime-out_datetime
-        time_dt = time_dt-time_shift
+        shift = time_options["shift_time"]
+        if shift:
+            time_shift = in_datetime-out_datetime
+            time_dt = time_dt-time_shift
 
-    bnds = time_options["set_time_bnds"]
-    if bnds:
-        length = time_dt[1]-time_dt[0]
-        lo, hi = GetTimeBnds[bnds](time_dt, length)
-        out_time_bnds = [t for t in zip(
-            [nc4.date2num(t, out_units) for t in lo], 
-            [nc4.date2num(t, out_units) for t in hi])]
-    else:
-        out_time_bnds = None
+        bnds = time_options["set_time_bnds"]
+        if bnds:
+            length = time_dt[1]-time_dt[0]
+            lo, hi = GetTimeBnds[bnds](time_dt, length)
+            out_time_bnds = [t for t in zip(
+                [nc4.date2num(t, out_units) for t in lo], 
+                [nc4.date2num(t, out_units) for t in hi])]
+        else:
+            out_time_bnds = None
 
-    out_time = nc4.date2num(time_dt, out_units)
-    return(out_time, out_time_bnds)
+        out_time = nc4.date2num(time_dt, out_units)
+        return(out_time, out_time_bnds)
 
 
 def GetTimeUnits(structure):
@@ -208,7 +208,7 @@ def GetModifiers(name, permute):
     return([{
         "variables2d_yflip": np.flipud,
         "variables2d_xflip": np.fliplr,
-        "variables1d_flip": lambda x: np.flip(x)
+        "variables1d_flip": lambda x: np.flip(x, 0)
     }[mod] for mod, vars in permute.items() if name in vars])
 
 
@@ -228,10 +228,10 @@ def ApplyFuncs(data, funcs):
 class EditNetCDF(object):
     """The big kahuna."""
 
-    def __init__(self, ncin=None, ncout=None, template=None):    
+    def __init__(self, ncin=None, template=None, ncout=None):    
         self.ncin = ncin
-        self.ncout = ncout
         self.template = template
+        self.ncout = ncout
            
         # get structure from header element of dict
         self.structure = self.template['header']
@@ -284,8 +284,10 @@ class EditNetCDF(object):
         out_time, out_time_bnds = ConvertTime(self.ncin, self.time)
         out_units = self.time["out_units"]
 
-        self.ncout.variables["time"][:] = out_time
-        self.ncout.variables["time"].units = out_units
+        if out_time:
+            self.ncout.variables["time"][:] = out_time
+            self.ncout.variables["time"].units = out_units
+        
         if out_time_bnds:
             try:
                 self.ncout.variables["time_bnds"][:] = out_time_bnds
@@ -474,12 +476,12 @@ def args_parser():
         description=scripthelp,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("ncin", help="Input netCDF")
-    p.add_argument("ncout", nargs="?", default=None, help="Output netCDF")
     p.add_argument("jsin", nargs="?", default=None, help="Input JSON")
+    p.add_argument("ncout", nargs="?", default=None, help="Output netCDF")
     args = p.parse_args()
 
     # determine template mode or edit mode based on number of arguments
-    ncin, ncout, jsin = args.ncin, args.ncout, args.jsin
+    ncin, jsin, ncout  = args.ncin, args.jsin, args.ncout
 
     # check argument 1: input netCDF
     try:
@@ -495,32 +497,32 @@ def args_parser():
             ncout = ncout+"/"+basename(splitext(ncin)[0])+"_edit.nc"
             print("INFO: Argument 2 is a directory, saving as: "+ncout)
 
-        # try to open output
-        try:
-            output_dataset = nc4.Dataset(ncout, "w")
-        except:
-            sys.exit(print("ERROR: Failed to read arg2. Exiting."))
-            print(scripthelp)
-
         # try to open json template
         try:
             with open(jsin, "r") as j:
                 template = json.load(j)
         except:
-            sys.exit(print("ERROR: Failed to read arg3. Exit."))
+            sys.exit(print("ERROR: Failed to read arg2. Exit."))
+            print(scripthelp)
+
+        # try to open output
+        try:
+            output_dataset = nc4.Dataset(ncout, "w")
+        except:
+            sys.exit(print("ERROR: Failed to read arg3. Exiting."))
             print(scripthelp)
 
     else:
         output_dataset = None
         template = splitext(ncin)[0]+".json"
 
-    return(input_dataset, output_dataset, template)
+    return(input_dataset, template, output_dataset)
 
 
 if __name__ == '__main__':
     
     # handle arguments, validate; return open file(s) # C:\Users\jjmcn\git\netCDFeditor\ncedit.py
-    input_dataset, output_dataset, template = args_parser()
+    input_dataset, template, output_dataset = args_parser()
 
     # if no args 2, write json template
     if output_dataset is None:
@@ -531,7 +533,7 @@ if __name__ == '__main__':
     # else, write changes to output netCDF
     else:
         # pass to job function
-        editor = EditNetCDF(input_dataset, output_dataset, template)
+        editor = EditNetCDF(input_dataset, template, output_dataset)
 
         # close input and output netCDFs
         input_dataset.close()
